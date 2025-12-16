@@ -10,81 +10,100 @@ const bot = new TelegramBot(TOKEN);
 const app = express();
 app.use(express.json());
 
-// ===== WEBHOOK =====
+// webhook
 app.post(`/bot${TOKEN}`, (req, res) => {
   bot.processUpdate(req.body);
   res.sendStatus(200);
 });
 
-// ===== SUD SOZLAMALARI =====
+// суд параметри
 const regionId = "kkultfsud";
 
-// Sana форматлаш
-function formatDate(date) {
-  return date.toISOString().slice(0, 10).replace(/-/g, "");
+// helpers
+function formatDate(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}${m}${day}`;
 }
 
-// Dam olish kunimi?
-function isWeekend(date) {
-  const day = date.getDay(); // 0-ya, 6-sh
-  return day === 0 || day === 6;
+function isWeekend(d) {
+  const day = d.getDay();
+  return day === 0 || day === 6; // yakshanba / shanba
 }
 
-// API’dan жадвал олиш
-async function getJadvalByDate(date) {
-  const ymd = formatDate(date);
-  const url = `https://jadvalapi.sud.uz/vka/CIVIL/${regionId}/${ymd}`;
+// API чақириш
+async function fetchDay(dateStr) {
+  const url = `https://jadvalapi.sud.uz/vka/CIVIL/${regionId}/${dateStr}`;
+  const res = await fetch(url, {
+    headers: { "Accept": "application/json" }
+  });
 
-  try {
-    const res = await fetch(url, {
-      headers: { "Accept": "application/json" },
-      timeout: 15000
-    });
-
-    if (!res.ok) return null;
-    const data = await res.json();
-    return Array.isArray(data) && data.length > 0 ? data : null;
-  } catch (e) {
-    console.error("API xato:", e.message);
-    return null;
-  }
+  if (!res.ok) return null;
+  return await res.json();
 }
 
-// ===== TELEGRAM KOMANDA =====
-bot.onText(/\/jadval/, async (msg) => {
-  const chatId = msg.chat.id;
+// 10 иш куни ичида қидириш
+async function findNextCourtDay() {
+  let checkedDays = 0;
+  let date = new Date();
 
-  let foundDate = null;
-
-  for (let i = 0; i < 10; i++) {
-    const date = new Date();
-    date.setDate(date.getDate() + i);
+  while (checkedDays < 10) {
+    date.setDate(date.getDate() + 1);
 
     if (isWeekend(date)) continue;
 
-    const jadval = await getJadvalByDate(date);
-    if (jadval) {
-      foundDate = date;
-      break;
+    checkedDays++;
+    const dateStr = formatDate(date);
+
+    const data = await fetchDay(dateStr);
+
+    // API жавоби массив бўлса
+    if (Array.isArray(data) && data.length > 0) {
+      return { date: dateStr, list: data };
+    }
+
+    // API жавоби объект бўлса
+    if (data && Array.isArray(data.data) && data.data.length > 0) {
+      return { date: dateStr, list: data.data };
     }
   }
 
-  if (!foundDate) {
+  return null;
+}
+
+// Telegram команда
+bot.onText(/\/jadval|жадвал/i, async (msg) => {
+  const chatId = msg.chat.id;
+
+  bot.sendMessage(chatId, "🔍 Яқин 10 иш куни текширилмоқда...");
+
+  const result = await findNextCourtDay();
+
+  if (!result) {
     return bot.sendMessage(
       chatId,
-      "Яқин 10 иш куни ичида суд жадвали топилмади."
+      "❌ Яқин 10 иш куни ичида суд жадвали топилмади."
     );
   }
 
-  const text =
-    "⚖️ Суд куни аниқланди:\n\n" +
-    `📅 Сана: ${foundDate.toLocaleDateString("uz-UZ")}\n` +
-    "📍 Суд: Қоракўл тумани фуқаролик суди";
+  const prettyDate =
+    result.date.slice(6, 8) +
+    "." +
+    result.date.slice(4, 6) +
+    "." +
+    result.date.slice(0, 4);
+
+  let text = `✅ Энг яқин суд куни:\n📅 ${prettyDate}\n\n`;
+
+  result.list.slice(0, 5).forEach((i, idx) => {
+    text += `${idx + 1}) ${i.caseNumber || "Иш"} ${i.time || ""}\n`;
+  });
 
   bot.sendMessage(chatId, text);
 });
 
-// ===== SERVER START =====
+// сервер
 app.listen(PORT, async () => {
   await bot.setWebHook(`${APP_URL}/bot${TOKEN}`);
   console.log("Webhook ишга тушди");
