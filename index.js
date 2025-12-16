@@ -19,53 +19,43 @@ app.post(`/bot${TOKEN}`, (req, res) => {
 // суд параметри
 const regionId = "kkultfsud";
 
-// helpers
-function formatDate(d) {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}${m}${day}`;
+// дам олиш кунларини чиқариш
+function isWorkDay(date) {
+  const d = date.getDay();
+  return d !== 0 && d !== 6; // 0=yakshanba, 6=shanba
 }
 
-function isWeekend(d) {
-  const day = d.getDay();
-  return day === 0 || day === 6; // yakshanba / shanba
+function formatDate(date) {
+  return date.toISOString().slice(0, 10).replace(/-/g, "");
 }
 
 // API чақириш
-async function fetchDay(dateStr) {
+async function fetchJadval(dateStr) {
   const url = `https://jadvalapi.sud.uz/vka/CIVIL/${regionId}/${dateStr}`;
-  const res = await fetch(url, {
-    headers: { "Accept": "application/json" }
-  });
-
+  const res = await fetch(url, { headers: { Accept: "application/json" } });
   if (!res.ok) return null;
   return await res.json();
 }
 
-// 10 иш куни ичида қидириш
-async function findNextCourtDay() {
+// 10 иш куни текшириш
+async function findNearestCourtDay() {
   let checkedDays = 0;
   let date = new Date();
 
   while (checkedDays < 10) {
     date.setDate(date.getDate() + 1);
 
-    if (isWeekend(date)) continue;
+    if (!isWorkDay(date)) continue;
 
     checkedDays++;
     const dateStr = formatDate(date);
+    const result = await fetchJadval(dateStr);
 
-    const data = await fetchDay(dateStr);
+    // 🔴 МУҲИМ ЖОЙ
+    const list = result?.data || result;
 
-    // API жавоби массив бўлса
-    if (Array.isArray(data) && data.length > 0) {
-      return { date: dateStr, list: data };
-    }
-
-    // API жавоби объект бўлса
-    if (data && Array.isArray(data.data) && data.data.length > 0) {
-      return { date: dateStr, list: data.data };
+    if (Array.isArray(list) && list.length > 0) {
+      return { date: dateStr, count: list.length };
     }
   }
 
@@ -76,35 +66,25 @@ async function findNextCourtDay() {
 bot.onText(/\/jadval|жадвал/i, async (msg) => {
   const chatId = msg.chat.id;
 
-  bot.sendMessage(chatId, "🔍 Яқин 10 иш куни текширилмоқда...");
+  await bot.sendMessage(chatId, "🔎 Яқин 10 иш куни текширилмоқда...");
 
-  const result = await findNextCourtDay();
+  const found = await findNearestCourtDay();
 
-  if (!result) {
+  if (!found) {
     return bot.sendMessage(
       chatId,
       "❌ Яқин 10 иш куни ичида суд жадвали топилмади."
     );
   }
 
-  const prettyDate =
-    result.date.slice(6, 8) +
-    "." +
-    result.date.slice(4, 6) +
-    "." +
-    result.date.slice(0, 4);
-
-  let text = `✅ Энг яқин суд куни:\n📅 ${prettyDate}\n\n`;
-
-  result.list.slice(0, 5).forEach((i, idx) => {
-    text += `${idx + 1}) ${i.caseNumber || "Иш"} ${i.time || ""}\n`;
-  });
-
-  bot.sendMessage(chatId, text);
+  bot.sendMessage(
+    chatId,
+    `✅ Суд жадвали топилди!\n\n📅 Сана: ${found.date}\n📂 Ишлар сони: ${found.count}`
+  );
 });
 
 // сервер
 app.listen(PORT, async () => {
   await bot.setWebHook(`${APP_URL}/bot${TOKEN}`);
-  console.log("Webhook ишга тушди");
+  console.log("Bot ishga tushdi");
 });
