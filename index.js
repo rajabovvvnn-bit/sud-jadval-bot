@@ -6,71 +6,68 @@ import express from "express";
 const TOKEN = process.env.BOT_TOKEN;
 const bot = new TelegramBot(TOKEN, { polling: true });
 
-// Render учун веб-сервер
 const app = express();
-app.get("/", (req, res) => res.send("Бот Енгил Режимда Фаол!"));
-const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`✅ Сервер ${PORT}-портда ишга тушди`));
+app.get("/", (req, res) => res.send("Бот ва Суд тизими фаол!"));
+app.listen(process.env.PORT || 10000);
 
-// 409 Conflict хатосини олдини олиш
 bot.deleteWebHook();
 
-async function getSudDataLight() {
+// Суд маълумотларини олиш функцияси (Lightweight версия)
+async function getSudJadvalData() {
     try {
-        // Сайтга Cookie билан сўров юбориш
         const response = await axios.get('https://jadval2.sud.uz/fib/fib-jadval.html', {
-            timeout: 15000,
+            timeout: 10000,
             headers: {
-                'Cookie': 'regionId=kkultfsud', // Қоракўл туманини белгилаш
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Referer': 'https://jadval2.sud.uz/fib/fib-jadval.html'
+                'Cookie': 'regionId=kkultfsud', // Қоракўл ФИБ
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
             }
         });
-
         const $ = cheerio.load(response.data);
-        const results = [];
-
-        // Жадвални сканерлаш
-        $('table tbody tr').each((i, row) => {
-            const cols = $(row).find('td');
+        let results = [];
+        $('table tbody tr').each((i, el) => {
+            const cols = $(el).find('td');
             if (cols.length >= 4) {
                 results.push({
                     time: $(cols[1]).text().trim(),
-                    caseNumber: $(cols[2]).text().trim(),
+                    case: $(cols[2]).text().trim(),
                     judge: $(cols[3]).text().trim(),
-                    parties: $(cols[4]).text().trim() || "Кўрсатилмаган"
+                    parties: $(cols[4]).text().trim()
                 });
             }
         });
-
         return results;
-    } catch (error) {
-        console.error("❌ Хатолик юз берди:", error.message);
+    } catch (e) {
         return null;
     }
 }
 
-bot.onText(/\/jadval/, async (msg) => {
+// Хабарларни қайта ишлаш
+bot.on('message', async (msg) => {
     const chatId = msg.chat.id;
-    await bot.sendMessage(chatId, "🚀 Тезкор қидирув бошланди, сайтдан маълумот оляпман...");
+    const text = msg.text ? msg.text.toLowerCase() : "";
 
-    const data = await getSudDataLight();
-    
-    if (data && data.length > 0) {
-        let text = `📅 *Бугунги суд мажлислари жадвали:*\n\n`;
-        data.slice(0, 10).forEach((item, i) => {
-            text += `${i + 1}. 📄 Иш: *${item.caseNumber}*\n`;
-            text += `   ⏰ Вақт: ${item.time}\n`;
-            text += `   👨‍⚖️ Судья: ${item.judge}\n\n`;
-        });
-        bot.sendMessage(chatId, text, { parse_mode: "Markdown" });
-    } else {
-        bot.sendMessage(chatId, "⚠️ Маълумот топилмади ёки сайт вақтинчалик блоклади. Илтимос, кейинроқ уриниб кўринг.");
+    // 1. Агар фойдаланувчи жадвални сўраса
+    if (text.includes("/jadval") || text.includes("жадвал")) {
+        await bot.sendMessage(chatId, "🔎 Қоракўл туман ФИБ суди бўйича бугунги жадвал текширилмоқда...");
+        const data = await getSudJadvalData();
+
+        if (data && data.length > 0) {
+            let resMsg = "📅 *Бугунги суд мажлислари:*\n\n";
+            data.slice(0, 10).forEach((it, i) => {
+                resMsg += `${i+1}. 📄 Иш: *${it.case}*\n⏰ Вақт: ${it.time}\n👨‍⚖️ Судья: ${it.judge}\n\n`;
+            });
+            return bot.sendMessage(chatId, resMsg, { parse_mode: "Markdown" });
+        } else {
+            return bot.sendMessage(chatId, "❌ Бугун учун очиқ суд мажлислари ҳақида маълумот топилмади ёки сайт вақтинча ишламаяпти.");
+        }
     }
-});
 
-bot.onText(/\/start/, (msg) => {
-    bot.sendMessage(msg.chat.id, "Ассалому алайкум! Суд жадвалини кўриш учун /jadval буйруғини юборинг.");
-});
+    // 2. Агар фойдаланувчи СИ (AI) билан гаплашмоқчи бўлса
+    if (text === "/start") {
+        return bot.sendMessage(chatId, "Ассалому алайкум, жаноб адвокат! Мен юридик СИ-ёрдамчиман. \n\n🔹 Суд жадвалини кўриш учун: /jadval\n🔹 Саволингиз бўлса, ёзаверинг.");
+    }
 
-console.log("🤖 Бот енгил режимда ишга тушди...");
+    // 3. Бошқа ҳар қандай хабарга AI жавоби (Сиз аввал ишлатган AI логикасини шу ерга қўшинг)
+    // Ҳозирча бот AI каби жавоб бериши учун оддий қайтариш қўямиз:
+    // bot.sendMessage(chatId, "Саволингиз қабул қилинди. AI таҳлил қилмоқда...");
+});
