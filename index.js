@@ -1,100 +1,96 @@
-import axios from "axios";
-import * as cheerio from "cheerio";
 import TelegramBot from "node-telegram-bot-api";
+import puppeteer from "puppeteer";
 import express from "express";
 
 const TOKEN = process.env.BOT_TOKEN;
 const bot = new TelegramBot(TOKEN, { polling: true });
 
 const app = express();
-app.get("/", (req, res) => res.send("Суд қидирув тизими фаол!"));
+app.get("/", (req, res) => res.send("Бот ва Профессионал Браузер ишламоқда!"));
 app.listen(process.env.PORT || 10000);
 
 bot.deleteWebHook();
 
-// Келаси 10 кунлик саналарни олиш (YYYY-MM-DD форматида)
-function getNext10Days() {
-    const dates = [];
-    for (let i = 0; i < 10; i++) {
-        const d = new Date();
-        d.setDate(d.getDate() + i);
-        // Фақат иш кунларини (душанба-жума) текшириш учун:
-        if (d.getDay() !== 0 && d.getDay() !== 6) {
-            dates.push(d.toISOString().split('T')[0]);
-        }
-    }
-    return dates;
-}
+async function searchInBrowser(fio) {
+    const browser = await puppeteer.launch({
+        headless: "new",
+        args: ['--no-sandbox', '--disable-setuid-sandbox']
+    });
+    const page = await browser.newPage();
+    const query = fio.toLowerCase();
+    let allMatches = [];
 
-// Маълум бир сана учун қидирув функцияси
-async function checkSudByDate(date, query) {
     try {
-        const response = await axios.get('https://jadval2.sud.uz/fib/fib-jadval.html', {
-            timeout: 8000,
-            headers: {
-                'Cookie': `regionId=kkultfsud; date=${date}`, // Санани Cookie орқали бериш
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            }
+        await page.goto('https://jadval2.sud.uz/fib/fib-jadval.html', { waitUntil: 'networkidle2' });
+        
+        // Суд тури ва ҳудудни созлаш
+        await page.evaluate(() => {
+            localStorage.setItem('regionId', 'kkultfsud'); // Қоракўл ФИБ
         });
+        await page.reload({ waitUntil: 'networkidle2' });
 
-        const $ = cheerio.load(response.data);
-        const matches = [];
+        // Яқин 10 кунни текшириш (Сайтдаги сана танлагич орқали)
+        for (let i = 0; i < 10; i++) {
+            const date = new Date();
+            date.setDate(date.getDate() + i);
+            const dateStr = date.toISOString().split('T')[0];
 
-        $('table tbody tr').each((i, el) => {
-            const cols = $(el).find('td');
-            if (cols.length >= 4) {
-                const parties = $(cols[4]).text().toLowerCase();
-                if (parties.includes(query.toLowerCase())) {
-                    matches.push({
-                        date: date,
-                        time: $(cols[1]).text().trim(),
-                        caseNumber: $(cols[2]).text().trim(),
-                        judge: $(cols[3]).text().trim(),
-                        parties: $(cols[4]).text().trim()
-                    });
+            // Санани танлаш ва юкланишини кутиш
+            await page.evaluate((d) => {
+                const dateInput = document.querySelector('#date');
+                if (dateInput) {
+                    dateInput.value = d;
+                    dateInput.dispatchEvent(new Event('change'));
                 }
+            }, dateStr);
+
+            await new Promise(r => setTimeout(r, 2000)); // Жадвал юкланиши учун 2 сония кутиш
+
+            const results = await page.evaluate((q) => {
+                const rows = Array.from(document.querySelectorAll('table tbody tr'));
+                return rows.map(row => {
+                    const cols = row.querySelectorAll('td');
+                    const parties = cols[4]?.innerText || "";
+                    if (parties.toLowerCase().includes(q)) {
+                        return {
+                            time: cols[1]?.innerText,
+                            caseNo: cols[2]?.innerText,
+                            judge: cols[3]?.innerText,
+                            parties: parties
+                        };
+                    }
+                    return null;
+                }).filter(x => x !== null);
+            }, query);
+
+            if (results.length > 0) {
+                results.forEach(r => allMatches.push({...r, date: dateStr}));
             }
-        });
-        return matches;
+        }
     } catch (e) {
-        return [];
+        console.error("Браузер хатоси:", e);
+    } finally {
+        await browser.close();
     }
+    return allMatches;
 }
 
 bot.on('message', async (msg) => {
     const chatId = msg.chat.id;
     const text = msg.text;
 
-    if (!text || text.startsWith('/')) {
-        if (text === "/start") {
-            bot.sendMessage(chatId, "⚖️ **Суд мажлисини қидириш боти**\n\nИлтимос, Ф.И.О.нгизни лотин алифбосида, худди паспортдагидек киритинг:");
-        }
-        return;
-    }
+    if (!text || text.startsWith('/')) return;
 
-    await bot.sendMessage(chatId, `🔍 **${text}** бўйича яқин 10 кунлик суд жадваллари текширилмоқда... \n(Бу бироз вақт олиши мумкин)`);
+    await bot.sendMessage(chatId, `🔍 **${text}** исми бўйича яқин 10 кунлик жадвалларни титкилаяпман... \n(Браузер ишга тушди, бироз кутинг)`);
+    
+    const found = await searchInBrowser(text);
 
-    const days = getNext10Days();
-    let foundAny = false;
-
-    for (const date of days) {
-        const results = await checkSudByDate(date, text);
-        
-        if (results.length > 0) {
-            foundAny = true;
-            for (const item of results) {
-                let response = `✅ **Мажлис тайинланган!**\n\n`;
-                response += `📅 **Сана:** ${item.date}\n`;
-                response += `⏰ **Вақт:** ${item.time}\n`;
-                response += `👨‍⚖️ **Судья:** ${item.judge}\n`;
-                response += `📄 **Иш №:** ${item.caseNumber}\n`;
-                response += `👥 **Тарафлар:** ${item.parties}`;
-                await bot.sendMessage(chatId, response);
-            }
-        }
-    }
-
-    if (!foundAny) {
-        bot.sendMessage(chatId, `❌ Яқин 10 кун ичида "${text}" иштирокида суд мажлиси топилмади.`);
+    if (found.length > 0) {
+        found.forEach(item => {
+            let m = `✅ **Мажлис топилди!**\n\n📅 Сана: ${item.date}\n⏰ Вақт: ${item.time}\n👨‍⚖️ Судья: ${item.judge}\n📄 Иш №: ${item.caseNo}\n👥 Тарафлар: ${item.parties}`;
+            bot.sendMessage(chatId, m);
+        });
+    } else {
+        bot.sendMessage(chatId, `❌ "${text}" бўйича яқин 10 кун ичида мажлис топилмади. Исмингиз лотинчада паспортдагидек ёзилганига амин бўлинг.`);
     }
 });
