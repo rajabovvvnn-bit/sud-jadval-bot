@@ -1,19 +1,13 @@
 {
-  "name": "sud-jadval-light-bot",
+  "name": "sud-jadval-pro",
   "version": "1.0.0",
-  "description": "Sud jadvali bot using Cheerio (Lightweight)",
-  "main": "index.js",
   "type": "module",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
     "express": "^4.18.2",
-    "axios": "^1.6.2",
-    "cheerio": "^1.0.0-rc.12",
+    "puppeteer": "^21.5.0",
     "node-telegram-bot-api": "^0.61.0"
-  },
-  "engines": {
-    "node": ">=18"
   }
 }
