@@ -1,198 +1,93 @@
-import fetch from "node-fetch";
+import axios from "axios";
 import TelegramBot from "node-telegram-bot-api";
 import express from "express";
 
-const app = express();
-const PORT = process.env.PORT || 3000;
+// 1. Созламалар
 const TOKEN = process.env.BOT_TOKEN;
-const WEBHOOK_URL = process.env.WEBHOOK_URL || "https://your-app.onrender.com";
+const bot = new TelegramBot(TOKEN, { polling: true });
+const regionId = "kkultfsud"; // Қоракўл туман ФИБ суди
 
-// Bot webhook rejimida
-const bot = new TelegramBot(TOKEN, { webHook: true });
-bot.setWebHook(`${WEBHOOK_URL}/bot${TOKEN}`);
+// Render учун оддий веб-сервер (порт 10000 ни банд қилиш учун)
+const app = express();
+app.get("/", (req, res) => res.send("Бот фаол ишламоқда!"));
+const PORT = process.env.PORT || 10000;
+app.listen(PORT, () => console.log(`✅ Веб-сервер ${PORT}-портда ишга тушди`));
 
-const regionId = "kkultfsud";
-
-app.use(express.json());
-
-// Health check
-app.get("/", (req, res) => {
-  res.send("Sud Jadval Bot ishlayapti ✅");
-});
-
-// Webhook endpoint
-app.post(`/bot${TOKEN}`, (req, res) => {
-  bot.processUpdate(req.body);
-  res.sendStatus(200);
-});
-
-/* ================= HELPERS ================= */
-
-// Ish kunini tekshirish
-function isWorkDay(date) {
-  const day = date.getDay();
-  return day !== 0 && day !== 6;
-}
-
-// Keyingi N ta ish kunini olish
+// 2. Иш кунларини аниқлаш
 function getNextWorkDays(count = 10) {
-  const days = [];
-  let current = new Date();
-  while (days.length < count) {
-    current.setDate(current.getDate() + 1);
-    if (isWorkDay(current)) {
-      days.push(new Date(current));
+    const days = [];
+    let current = new Date();
+    while (days.length < count) {
+        current.setDate(current.getDate() + 1);
+        if (current.getDay() !== 0 && current.getDay() !== 6) {
+            days.push(new Date(current));
+        }
     }
-  }
-  return days;
+    return days;
 }
 
-// API dan jadval olish
+// 3. API дан маълумот олиш (Кенгайтирилган Headers билан)
 async function getSudJadval(date) {
-  const yyyymmdd = date.toISOString().slice(0, 10).replace(/-/g, "");
-  const url = `https://jadvalapi.sud.uz/vka/CIVIL/${regionId}/${yyyymmdd}`;
-  
-  console.log(`🔍 [API] So'rov: ${url}`);
-  
-  try {
-    const res = await fetch(url, {
-      headers: {
-        "Accept": "application/json",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-      },
-      timeout: 10000
-    });
-    
-    console.log(`📊 [API] Status: ${res.status}`);
-    
-    if (!res.ok) {
-      console.error(`❌ [API] Xato: ${res.status} ${res.statusText}`);
-      return null;
+    const yyyymmdd = date.toISOString().slice(0, 10).replace(/-/g, "");
+    const url = `https://jadvalapi.sud.uz/vka/CIVIL/${regionId}/${yyyymmdd}`;
+
+    try {
+        const res = await axios.get(url, {
+            timeout: 10000, // 10 сония кутиш
+            headers: {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept": "application/json, text/plain, */*",
+                "Referer": "https://jadval2.sud.uz/",
+                "Origin": "https://jadval2.sud.uz"
+            }
+        });
+        
+        return res.data && res.data.length ? res.data : null;
+    } catch (e) {
+        // Хатолик турини аниқлаш
+        if (e.response) {
+            console.error(`❌ API Хато (Статус ${e.response.status}): Блокланган бўлиши мумкин.`);
+        } else if (e.request) {
+            console.error("❌ API Хато: Сервер жавоб бермаяпти (Timeout). Эҳтимол IP блокланган.");
+        } else {
+            console.error("❌ Хатолик:", e.message);
+        }
+        return null;
     }
-    
-    const data = await res.json();
-    console.log(`✅ [API] Ma'lumot olindi: ${data.length} ta yozuv`);
-    
-    return data.length ? data : null;
-  } catch (e) {
-    console.error(`❌ [API] Xato: ${e.message}`);
-    return null;
-  }
 }
 
-// 10 ish kunini tekshirish
-async function checkNext10WorkDays(chatId) {
-  console.log(`📅 [BOT] 10 kun tekshiruvi boshlandi: Chat ${chatId}`);
-  
-  await bot.sendMessage(chatId, "🔎 Яқин 10 иш куни текширилмоқда...");
-  
-  const workDays = getNextWorkDays(10);
-  
-  for (let date of workDays) {
-    const data = await getSudJadval(date);
-    
-    if (data) {
-      let text = `📅 *${date.toLocaleDateString('uz-UZ')}* санасига суд жадвали:\n\n`;
-      
-      data.slice(0, 5).forEach((item, i) => {
-        text += `${i + 1}. 🧾 Иш рақами: \`${item.caseNumber || "—"}\`\n`;
-        text += `   ⏰ Вақт: ${item.time || "—"}\n`;
-        text += `   👨‍⚖️ Судья: ${item.judge || "—"}\n`;
-        text += `   📍 Зал: ${item.room || "—"}\n\n`;
-      });
-      
-      if (data.length > 5) {
-        text += `_... ва яна ${data.length - 5} та иш_\n`;
-      }
-      
-      await bot.sendMessage(chatId, text, { parse_mode: "Markdown" });
-      console.log(`✅ [BOT] Jadval yuborildi: ${date.toLocaleDateString()}`);
-      return;
-    }
-  }
-  
-  await bot.sendMessage(chatId, "❌ Яқин 10 иш куни ичида суд жадвали топилмади.");
-  console.log(`⚠️ [BOT] Jadval topilmadi`);
-}
-
-/* ================= BOT LOGIC ================= */
-
-// /start buyrug'i
-bot.onText(/\/start/, async (msg) => {
-  const chatId = msg.chat.id;
-  const firstName = msg.from.first_name || "Foydalanuvchi";
-  
-  await bot.sendMessage(
-    chatId,
-    `Ассалому алайкум, ${firstName}! 👋\n\n` +
-    `Мен Қорақўл туман суди жадвалини кўрсатувчи ботман.\n\n` +
-    `📋 Буйруқлар:\n` +
-    `/jadval - Яқин 10 иш кунидаги суд жадвали\n` +
-    `/help - Ёрдам`
-  );
-});
-
-// /help buyrug'i
-bot.onText(/\/help/, async (msg) => {
-  const chatId = msg.chat.id;
-  
-  await bot.sendMessage(
-    chatId,
-    `⚖️ *Суд жадвали боти*\n\n` +
-    `Бу бот Ўзбекистон Олий суди сайтидан Қорақўл туман фуқаролик суди жадвалини олиб беради.\n\n` +
-    `📋 Буйруқлар:\n` +
-    `/jadval - Яқин суд жадвалини кўриш\n` +
-    `/start - Бошлаш\n\n` +
-    `📞 Саволлар учун: @termezadvokat`,
-    { parse_mode: "Markdown" }
-  );
-});
-
-// /jadval buyrug'i
+// 4. Бот буйруқлари
 bot.onText(/\/jadval/, async (msg) => {
-  const chatId = msg.chat.id;
-  console.log(`📨 [BOT] /jadval so'rovi: User ${msg.from.id}`);
-  
-  await checkNext10WorkDays(chatId);
+    const chatId = msg.chat.id;
+    await bot.sendMessage(chatId, "🔎 Суд жадвали текширилмоқда, илтимос кутинг...");
+
+    const workDays = getNextWorkDays(7); // Тезроқ ишлаши учун 7 кунлик қиламиз
+    let found = false;
+
+    for (let date of workDays) {
+        const data = await getSudJadval(date);
+        if (data) {
+            found = true;
+            let text = `📅 *${date.toLocaleDateString()}* санасига жадвал:\n\n`;
+            data.slice(0, 10).forEach((item, i) => {
+                text += `${i + 1}) 🧾 Иш №: *${item.caseNumber || "—"}*\n`;
+                text += `⏰ Вақт: ${item.time || "—"}\n`;
+                text += `👨‍⚖️ Судья: ${item.judge || "—"}\n\n`;
+            });
+            await bot.sendMessage(chatId, text, { parse_mode: "Markdown" });
+            break; 
+        }
+    }
+
+    if (!found) {
+        await bot.sendMessage(chatId, "❌ Яқин кунлар ичида очиқ суд мажлислари топилмади ёки тизимга кириш имкони бўлмади.");
+    }
 });
 
-// Oddiy xabarlarga javob
-bot.on("message", async (msg) => {
-  const text = msg.text;
-  const chatId = msg.chat.id;
-  
-  if (!text || text.startsWith("/")) return;
-  
-  const lowerText = text.toLowerCase();
-  
-  if (lowerText.includes("салом") || lowerText.includes("привет")) {
-    await bot.sendMessage(
-      chatId,
-      "Ассалому алайкум! 👋\n\nСуд жадвалини кўриш учун /jadval буйруғини юборинг."
-    );
-  } else if (lowerText.includes("жадвал") || lowerText.includes("jadval")) {
-    await checkNext10WorkDays(chatId);
-  } else {
-    await bot.sendMessage(
-      chatId,
-      "⚖️ Суд жадвалини кўриш учун /jadval ёки /help ёзинг."
-    );
-  }
+bot.on("message", (msg) => {
+    if (msg.text === "/start") {
+        bot.sendMessage(msg.chat.id, "Хуш келибсиз! Суд мажлислари жадвалини кўриш учун /jadval буйруғини юборинг.");
+    }
 });
 
-/* ================= SERVER ================= */
-
-app.listen(PORT, () => {
-  console.log(`✅ Server ${PORT}-portda ishlamoqda`);
-  console.log(`🔗 Webhook: ${WEBHOOK_URL}/bot${TOKEN}`);
-  console.log(`📍 Region: ${regionId}`);
-});
-
-// Xatoliklarni ushlash
-process.on('unhandledRejection', (error) => {
-  console.error('❌ Unhandled rejection:', error);
-});
-
-process.on('uncaughtException', (error) => {
-  console.error('❌ Uncaught exception:', error);
-});
+console.log("🚀 Бот ишга тушди...");
