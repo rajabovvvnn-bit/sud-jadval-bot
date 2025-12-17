@@ -1,14 +1,18 @@
 {
-  "name": "sud-jadval-bot",
+  "name": "sud-jadval-browser-bot",
   "version": "1.0.0",
+  "description": "Sud jadvali bot using Puppeteer",
+  "main": "index.js",
   "type": "module",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
     "express": "^4.18.2",
-    "axios": "^1.6.0",
-    "node-telegram-bot-api": "^0.61.0",
-    "dotenv": "^16.0.0"
+    "puppeteer": "^21.5.0",
+    "node-telegram-bot-api": "^0.61.0"
+  },
+  "engines": {
+    "node": ">=18"
   }
 }
