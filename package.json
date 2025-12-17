@@ -1,7 +1,7 @@
 {
-  "name": "sud-jadval-browser-bot",
+  "name": "sud-jadval-light-bot",
   "version": "1.0.0",
-  "description": "Sud jadvali bot using Puppeteer",
+  "description": "Sud jadvali bot using Cheerio (Lightweight)",
   "main": "index.js",
   "type": "module",
   "scripts": {
@@ -9,7 +9,8 @@
   },
   "dependencies": {
     "express": "^4.18.2",
-    "puppeteer": "^21.5.0",
+    "axios": "^1.6.2",
+    "cheerio": "^1.0.0-rc.12",
     "node-telegram-bot-api": "^0.61.0"
   },
   "engines": {
