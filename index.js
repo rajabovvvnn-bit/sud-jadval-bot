@@ -7,67 +7,94 @@ const TOKEN = process.env.BOT_TOKEN;
 const bot = new TelegramBot(TOKEN, { polling: true });
 
 const app = express();
-app.get("/", (req, res) => res.send("Бот ва Суд тизими фаол!"));
+app.get("/", (req, res) => res.send("Суд қидирув тизими фаол!"));
 app.listen(process.env.PORT || 10000);
 
 bot.deleteWebHook();
 
-// Суд маълумотларини олиш функцияси (Lightweight версия)
-async function getSudJadvalData() {
+// Келаси 10 кунлик саналарни олиш (YYYY-MM-DD форматида)
+function getNext10Days() {
+    const dates = [];
+    for (let i = 0; i < 10; i++) {
+        const d = new Date();
+        d.setDate(d.getDate() + i);
+        // Фақат иш кунларини (душанба-жума) текшириш учун:
+        if (d.getDay() !== 0 && d.getDay() !== 6) {
+            dates.push(d.toISOString().split('T')[0]);
+        }
+    }
+    return dates;
+}
+
+// Маълум бир сана учун қидирув функцияси
+async function checkSudByDate(date, query) {
     try {
         const response = await axios.get('https://jadval2.sud.uz/fib/fib-jadval.html', {
-            timeout: 10000,
+            timeout: 8000,
             headers: {
-                'Cookie': 'regionId=kkultfsud', // Қоракўл ФИБ
+                'Cookie': `regionId=kkultfsud; date=${date}`, // Санани Cookie орқали бериш
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
             }
         });
+
         const $ = cheerio.load(response.data);
-        let results = [];
+        const matches = [];
+
         $('table tbody tr').each((i, el) => {
             const cols = $(el).find('td');
             if (cols.length >= 4) {
-                results.push({
-                    time: $(cols[1]).text().trim(),
-                    case: $(cols[2]).text().trim(),
-                    judge: $(cols[3]).text().trim(),
-                    parties: $(cols[4]).text().trim()
-                });
+                const parties = $(cols[4]).text().toLowerCase();
+                if (parties.includes(query.toLowerCase())) {
+                    matches.push({
+                        date: date,
+                        time: $(cols[1]).text().trim(),
+                        caseNumber: $(cols[2]).text().trim(),
+                        judge: $(cols[3]).text().trim(),
+                        parties: $(cols[4]).text().trim()
+                    });
+                }
             }
         });
-        return results;
+        return matches;
     } catch (e) {
-        return null;
+        return [];
     }
 }
 
-// Хабарларни қайта ишлаш
 bot.on('message', async (msg) => {
     const chatId = msg.chat.id;
-    const text = msg.text ? msg.text.toLowerCase() : "";
+    const text = msg.text;
 
-    // 1. Агар фойдаланувчи жадвални сўраса
-    if (text.includes("/jadval") || text.includes("жадвал")) {
-        await bot.sendMessage(chatId, "🔎 Қоракўл туман ФИБ суди бўйича бугунги жадвал текширилмоқда...");
-        const data = await getSudJadvalData();
+    if (!text || text.startsWith('/')) {
+        if (text === "/start") {
+            bot.sendMessage(chatId, "⚖️ **Суд мажлисини қидириш боти**\n\nИлтимос, Ф.И.О.нгизни лотин алифбосида, худди паспортдагидек киритинг:");
+        }
+        return;
+    }
 
-        if (data && data.length > 0) {
-            let resMsg = "📅 *Бугунги суд мажлислари:*\n\n";
-            data.slice(0, 10).forEach((it, i) => {
-                resMsg += `${i+1}. 📄 Иш: *${it.case}*\n⏰ Вақт: ${it.time}\n👨‍⚖️ Судья: ${it.judge}\n\n`;
-            });
-            return bot.sendMessage(chatId, resMsg, { parse_mode: "Markdown" });
-        } else {
-            return bot.sendMessage(chatId, "❌ Бугун учун очиқ суд мажлислари ҳақида маълумот топилмади ёки сайт вақтинча ишламаяпти.");
+    await bot.sendMessage(chatId, `🔍 **${text}** бўйича яқин 10 кунлик суд жадваллари текширилмоқда... \n(Бу бироз вақт олиши мумкин)`);
+
+    const days = getNext10Days();
+    let foundAny = false;
+
+    for (const date of days) {
+        const results = await checkSudByDate(date, text);
+        
+        if (results.length > 0) {
+            foundAny = true;
+            for (const item of results) {
+                let response = `✅ **Мажлис тайинланган!**\n\n`;
+                response += `📅 **Сана:** ${item.date}\n`;
+                response += `⏰ **Вақт:** ${item.time}\n`;
+                response += `👨‍⚖️ **Судья:** ${item.judge}\n`;
+                response += `📄 **Иш №:** ${item.caseNumber}\n`;
+                response += `👥 **Тарафлар:** ${item.parties}`;
+                await bot.sendMessage(chatId, response);
+            }
         }
     }
 
-    // 2. Агар фойдаланувчи СИ (AI) билан гаплашмоқчи бўлса
-    if (text === "/start") {
-        return bot.sendMessage(chatId, "Ассалому алайкум, жаноб адвокат! Мен юридик СИ-ёрдамчиман. \n\n🔹 Суд жадвалини кўриш учун: /jadval\n🔹 Саволингиз бўлса, ёзаверинг.");
+    if (!foundAny) {
+        bot.sendMessage(chatId, `❌ Яқин 10 кун ичида "${text}" иштирокида суд мажлиси топилмади.`);
     }
-
-    // 3. Бошқа ҳар қандай хабарга AI жавоби (Сиз аввал ишлатган AI логикасини шу ерга қўшинг)
-    // Ҳозирча бот AI каби жавоб бериши учун оддий қайтариш қўямиз:
-    // bot.sendMessage(chatId, "Саволингиз қабул қилинди. AI таҳлил қилмоқда...");
 });
